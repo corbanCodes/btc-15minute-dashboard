@@ -72,6 +72,8 @@ class LiveBotState:
         self.max_loss_streak = 0
         self.pending_trade: Optional[dict] = None
         self.traded_windows = set()  # Track which windows we've traded
+        self.skipped_windows: List[dict] = []  # Track why we skipped windows
+        self.last_skip_reason: str = None  # Most recent skip reason
 
     def get_series(self) -> str:
         if self.bot_id.startswith('s1_'):
@@ -108,12 +110,15 @@ class LiveBotState:
 # =============================================================================
 
 def check_fixed_minute_entry(bot: LiveBotState, tick: dict) -> Optional[dict]:
-    """Check if fixed-minute bot should enter"""
+    """Check if fixed-minute bot should enter. Returns trade_info or None with skip reason tracked."""
+    window_id = tick['window_id']
+
     if bot.pending_trade:
+        bot.last_skip_reason = "Already has pending trade"
         return None
 
-    window_id = tick['window_id']
     if window_id in bot.traded_windows:
+        bot.last_skip_reason = "Already traded this window"
         return None
 
     target_minute = bot.config['target_minute']
@@ -122,6 +127,8 @@ def check_fixed_minute_entry(bot: LiveBotState, tick: dict) -> Optional[dict]:
 
     # Check if we're at the target minute (within 30 sec window)
     if not (target_mins_left - 0.5 <= mins_left <= target_mins_left + 0.5):
+        current_min = int(14 - mins_left)
+        bot.last_skip_reason = f"Waiting for minute {target_minute} (currently min {current_min})"
         return None
 
     btc_price = tick['btc_price']
@@ -135,7 +142,12 @@ def check_fixed_minute_entry(bot: LiveBotState, tick: dict) -> Optional[dict]:
         price = tick['no_ask']
         direction = 'NO'
 
-    if price == 0 or price >= 100:
+    if price == 0:
+        bot.last_skip_reason = f"No market price available ({direction} ask = 0)"
+        return None
+
+    if price >= 100:
+        bot.last_skip_reason = f"Price too high ({direction} @ {price}c = 100%)"
         return None
 
     true_prob = bot.config['true_probability']
@@ -144,37 +156,47 @@ def check_fixed_minute_entry(bot: LiveBotState, tick: dict) -> Optional[dict]:
 
     min_edge = bot.config.get('min_edge', 0)
     if edge < min_edge:
+        bot.last_skip_reason = f"Edge too low ({edge*100:.1f}% < {min_edge*100:.1f}% min)"
         return None
 
     max_price = bot.config.get('max_price_cents', 100)
     if price > max_price:
+        bot.last_skip_reason = f"Price exceeds max ({price}c > {max_price}c)"
         return None
 
+    bot.last_skip_reason = None  # Clear - we're trading!
     return {'direction': direction, 'price': price, 'edge': edge}
 
 def check_dynamic_edge_entry(bot: LiveBotState, tick: dict) -> Optional[dict]:
     """Check if dynamic edge bot should enter"""
+    window_id = tick['window_id']
+
     if bot.pending_trade:
+        bot.last_skip_reason = "Already has pending trade"
         return None
 
-    window_id = tick['window_id']
     if window_id in bot.traded_windows:
+        bot.last_skip_reason = "Already traded this window"
         return None
 
     mins_left = tick['mins_left']
     min_wait = bot.config['min_wait_minutes']
+    current_minute = int(14 - mins_left)
 
     if mins_left > (14 - min_wait):
+        bot.last_skip_reason = f"Waiting {min_wait} min before entry (currently min {current_minute})"
         return None
     if mins_left < 1:
+        bot.last_skip_reason = "Window ending (<1 min left)"
         return None
 
-    current_minute = int(14 - mins_left)
     if current_minute < 1 or current_minute > 13:
+        bot.last_skip_reason = f"Invalid minute ({current_minute})"
         return None
 
     true_prob = get_persistence_rate(current_minute)
     if true_prob is None:
+        bot.last_skip_reason = f"No persistence data for minute {current_minute}"
         return None
 
     btc_price = tick['btc_price']
@@ -188,7 +210,12 @@ def check_dynamic_edge_entry(bot: LiveBotState, tick: dict) -> Optional[dict]:
         price = tick['no_ask']
         direction = 'NO'
 
-    if price == 0 or price >= 100:
+    if price == 0:
+        bot.last_skip_reason = f"No market price ({direction} ask = 0)"
+        return None
+
+    if price >= 100:
+        bot.last_skip_reason = f"Price at 100% ({direction} @ {price}c)"
         return None
 
     implied_prob = price / 100
@@ -196,31 +223,40 @@ def check_dynamic_edge_entry(bot: LiveBotState, tick: dict) -> Optional[dict]:
 
     min_edge = bot.config['min_edge']
     if edge < min_edge:
+        bot.last_skip_reason = f"Edge {edge*100:.1f}% < {min_edge*100:.1f}% threshold"
         return None
 
+    bot.last_skip_reason = None
     return {'direction': direction, 'price': price, 'edge': edge}
 
 def check_sentiment_entry(bot: LiveBotState, tick: dict) -> Optional[dict]:
     """Check if sentiment bot should enter"""
+    window_id = tick['window_id']
+
     if bot.pending_trade:
+        bot.last_skip_reason = "Already has pending trade"
         return None
 
-    window_id = tick['window_id']
     if window_id in bot.traded_windows:
+        bot.last_skip_reason = "Already traded this window"
         return None
 
     mins_left = tick['mins_left']
     min_wait = bot.config['min_wait_minutes']
+    current_minute = int(14 - mins_left)
 
     if mins_left > (14 - min_wait):
+        bot.last_skip_reason = f"Waiting {min_wait} min (currently min {current_minute})"
         return None
     if mins_left < 0.5:
+        bot.last_skip_reason = "Window ending (<30 sec left)"
         return None
 
     yes_price = tick['yes_ask']
     no_price = tick['no_ask']
 
     if yes_price == 0 or no_price == 0:
+        bot.last_skip_reason = f"No market prices (YES={yes_price}c, NO={no_price}c)"
         return None
 
     threshold = bot.config['odds_threshold']
@@ -232,11 +268,14 @@ def check_sentiment_entry(bot: LiveBotState, tick: dict) -> Optional[dict]:
         direction = 'NO'
         price = no_price
     else:
+        bot.last_skip_reason = f"No strong sentiment (YES={yes_price}c, NO={no_price}c < {threshold}c threshold)"
         return None
 
     if price >= 100:
+        bot.last_skip_reason = f"Price at 100% ({direction} @ {price}c)"
         return None
 
+    bot.last_skip_reason = None
     return {'direction': direction, 'price': price, 'edge': None}
 
 def execute_trade(bot: LiveBotState, tick: dict, trade_info: dict):
@@ -559,6 +598,9 @@ class LiveWorker:
                 'current_streak': stats['current_streak'],
                 'max_win_streak': stats['max_win_streak'],
                 'max_loss_streak': stats['max_loss_streak'],
+                'trade_history': bot.trades,  # Full trade history
+                'pending_trade': bot.pending_trade,  # Current pending trade if any
+                'last_skip_reason': bot.last_skip_reason,  # Why didn't it trade?
             }
 
         try:
