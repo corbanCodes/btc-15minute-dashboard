@@ -12,6 +12,7 @@ import csv
 import io
 from datetime import datetime
 from functools import wraps
+from types import SimpleNamespace
 from flask import Flask, render_template_string, jsonify, request, Response, redirect, url_for, session
 
 app = Flask(__name__)
@@ -251,6 +252,40 @@ DASHBOARD_TEMPLATE = '''
             </div>
         </div>
     </div>
+
+    <!-- Live Market Info -->
+    {% if market %}
+    <div class="section" style="background: linear-gradient(135deg, #161b22, #1a2332); border-color: #58a6ff;">
+        <h2 style="color: #58a6ff; border-bottom-color: #58a6ff;">Live Market</h2>
+        <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));">
+            <div class="stat-box" style="border-color: #58a6ff;">
+                <div class="stat-value" style="color: #58a6ff;">${{ "{:,.0f}".format(market.btc_price) }}</div>
+                <div class="stat-label">BTC Price</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">${{ "{:,.0f}".format(market.strike_price) }}</div>
+                <div class="stat-label">Strike</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value {{ 'negative' if market.mins_left < 3 else '' }}">{{ "%.1f"|format(market.mins_left) }}m</div>
+                <div class="stat-label">Time Left</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value {{ 'positive' if market.btc_price > market.strike_price else 'negative' }}">{{ 'ABOVE' if market.btc_price > market.strike_price else 'BELOW' }}</div>
+                <div class="stat-label">Position</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">{{ market.yes_ask }}c</div>
+                <div class="stat-label">YES Ask</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">{{ market.no_ask }}c</div>
+                <div class="stat-label">NO Ask</div>
+            </div>
+        </div>
+        <p style="color: #484f58; font-size: 0.7rem; margin-top: 10px;">Updated: {{ market.timestamp[:19] if market.timestamp else 'N/A' }} UTC</p>
+    </div>
+    {% endif %}
 
     <!-- Performance Chart -->
     {% if total_trades > 0 %}
@@ -789,6 +824,10 @@ def dashboard():
     s2_trades = sum(b['trades'] for b in s2_bots)
     s3_trades = sum(b['trades'] for b in s3_bots)
 
+    # Get market data as object for template
+    market_data = state.get('market')
+    market = SimpleNamespace(**market_data) if market_data else None
+
     return render_template_string(
         DASHBOARD_TEMPLATE,
         total_trades=total_trades,
@@ -796,6 +835,7 @@ def dashboard():
         total_profit=total_profit,
         windows_processed=state.get('windows_processed', 0),
         current_window=state.get('current_window'),
+        market=market,
         top_bots=bot_list[:10],
         s1_bots=sorted(s1_bots, key=lambda x: x['profit'], reverse=True),
         s2_bots=sorted(s2_bots, key=lambda x: x['profit'], reverse=True),

@@ -578,6 +578,8 @@ class LiveWorker:
             'windows_processed': len(self.settled_windows),
             'current_window': self.current_window,
             'runtime_seconds': (datetime.now() - self.start_time).total_seconds(),
+            # Live market info
+            'market': getattr(self, 'last_tick', None),
             'bots': {}
         }
 
@@ -774,6 +776,9 @@ class LiveWorker:
                 if tick['strike_price'] == 0:
                     time.sleep(5)
                     continue
+
+                # Save for dashboard
+                self.last_tick = tick
 
                 # Process tick for all bots
                 self.process_tick(tick)
