@@ -252,6 +252,14 @@ DASHBOARD_TEMPLATE = '''
         </div>
     </div>
 
+    <!-- Performance Chart -->
+    {% if total_trades > 0 %}
+    <div class="section">
+        <h2>P/L by Series Over Time</h2>
+        <canvas id="mainChart" style="max-height: 200px;"></canvas>
+    </div>
+    {% endif %}
+
     <!-- Top Performers -->
     <div class="section">
         <h2>Top 10 Performers</h2>
@@ -359,6 +367,67 @@ DASHBOARD_TEMPLATE = '''
     </div>
 
     <p class="last-update">Last update: {{ last_update }} | Auto-refresh every 30 seconds</p>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+    {% if total_trades > 0 %}
+    const ctx = document.getElementById('mainChart').getContext('2d');
+
+    // Series P/L data
+    const seriesData = {
+        s1: { profit: {{ s1_profit }}, trades: {{ s1_trades }}, label: 'Fixed-Minute' },
+        s2: { profit: {{ s2_profit }}, trades: {{ s2_trades }}, label: 'Dynamic Edge' },
+        s3: { profit: {{ s3_profit }}, trades: {{ s3_trades }}, label: 'Sentiment' }
+    };
+
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: ['Fixed-Minute (S1)', 'Dynamic Edge (S2)', 'Sentiment (S3)'],
+            datasets: [{
+                label: 'Profit/Loss',
+                data: [seriesData.s1.profit, seriesData.s2.profit, seriesData.s3.profit],
+                backgroundColor: [
+                    seriesData.s1.profit >= 0 ? 'rgba(63, 185, 80, 0.7)' : 'rgba(248, 81, 73, 0.7)',
+                    seriesData.s2.profit >= 0 ? 'rgba(63, 185, 80, 0.7)' : 'rgba(248, 81, 73, 0.7)',
+                    seriesData.s3.profit >= 0 ? 'rgba(63, 185, 80, 0.7)' : 'rgba(248, 81, 73, 0.7)'
+                ],
+                borderColor: [
+                    seriesData.s1.profit >= 0 ? '#3fb950' : '#f85149',
+                    seriesData.s2.profit >= 0 ? '#3fb950' : '#f85149',
+                    seriesData.s3.profit >= 0 ? '#3fb950' : '#f85149'
+                ],
+                borderWidth: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) {
+                            const series = ['s1', 's2', 's3'][ctx.dataIndex];
+                            return `$${ctx.raw.toFixed(2)} (${seriesData[series].trades} trades)`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    grid: { color: '#21262d' },
+                    ticks: { color: '#8b949e', callback: v => '$' + v }
+                },
+                x: {
+                    grid: { display: false },
+                    ticks: { color: '#8b949e' }
+                }
+            }
+        }
+    });
+    {% endif %}
+    </script>
 </body>
 </html>
 '''
@@ -497,6 +566,46 @@ BOT_DETAIL_TEMPLATE = '''
         </div>
     </div>
 
+    <!-- Strategy Summary -->
+    <div class="section">
+        <h2>Strategy Summary</h2>
+        <p style="color: #c9d1d9; margin-bottom: 12px;">{{ bot_data.description or 'No description available' }}</p>
+        <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));">
+            {% if bot_data.config.target_minute %}
+            <div class="stat-box">
+                <div class="stat-value">Min {{ bot_data.config.target_minute }}</div>
+                <div class="stat-label">Entry Time</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">{{ "%.1f"|format(bot_data.config.true_probability * 100) }}%</div>
+                <div class="stat-label">True Prob</div>
+            </div>
+            {% endif %}
+            {% if bot_data.config.min_wait_minutes is not none %}
+            <div class="stat-box">
+                <div class="stat-value">{{ bot_data.config.min_wait_minutes }}m</div>
+                <div class="stat-label">Min Wait</div>
+            </div>
+            {% endif %}
+            {% if bot_data.config.min_edge %}
+            <div class="stat-box">
+                <div class="stat-value">{{ "%.0f"|format(bot_data.config.min_edge * 100) }}%</div>
+                <div class="stat-label">Min Edge</div>
+            </div>
+            {% endif %}
+            {% if bot_data.config.odds_threshold %}
+            <div class="stat-box">
+                <div class="stat-value">{{ bot_data.config.odds_threshold }}c</div>
+                <div class="stat-label">Odds Threshold</div>
+            </div>
+            {% endif %}
+            <div class="stat-box">
+                <div class="stat-value">${{ bot_data.config.bet_size }}</div>
+                <div class="stat-label">Bet Size</div>
+            </div>
+        </div>
+    </div>
+
     {% if pending_trade %}
     <div class="status-box pending">
         <h3>PENDING TRADE</h3>
@@ -510,6 +619,14 @@ BOT_DETAIL_TEMPLATE = '''
     <div class="status-box skip">
         <h3>CURRENT STATUS</h3>
         <p>{{ skip_reason }}</p>
+    </div>
+    {% endif %}
+
+    <!-- Performance Chart -->
+    {% if trades %}
+    <div class="section">
+        <h2>Bankroll Over Time</h2>
+        <canvas id="perfChart" style="max-height: 250px;"></canvas>
     </div>
     {% endif %}
 
@@ -555,6 +672,59 @@ BOT_DETAIL_TEMPLATE = '''
             <tr><td>Worst Loss Streak</td><td class="negative">{{ bot_data.max_loss_streak }}</td></tr>
         </table>
     </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+    {% if trades %}
+    const ctx = document.getElementById('perfChart').getContext('2d');
+    const trades = {{ trades | tojson }};
+
+    // Build bankroll data from trades (in chronological order)
+    const labels = ['Start'];
+    const data = [1000];  // Starting bankroll
+
+    trades.forEach((trade, i) => {
+        labels.push('#' + (i + 1));
+        data.push(trade.bankroll_after);
+    });
+
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Bankroll',
+                data: data,
+                borderColor: data[data.length-1] >= 1000 ? '#3fb950' : '#f85149',
+                backgroundColor: 'rgba(63, 185, 80, 0.1)',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 3,
+                pointBackgroundColor: data.map((v, i) =>
+                    i === 0 ? '#8b949e' : (trades[i-1]?.outcome === 'win' ? '#3fb950' : '#f85149')
+                ),
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                y: {
+                    grid: { color: '#21262d' },
+                    ticks: { color: '#8b949e' }
+                },
+                x: {
+                    grid: { color: '#21262d' },
+                    ticks: { color: '#8b949e', maxRotation: 0 }
+                }
+            }
+        }
+    });
+    {% endif %}
+    </script>
 </body>
 </html>
 '''
@@ -611,6 +781,14 @@ def dashboard():
     s2_bots = [b for b in bot_list if b['bot_id'].startswith('s2_')]
     s3_bots = [b for b in bot_list if b['bot_id'].startswith('s3_')]
 
+    # Calculate series-level stats for chart
+    s1_profit = sum(b['profit'] for b in s1_bots)
+    s2_profit = sum(b['profit'] for b in s2_bots)
+    s3_profit = sum(b['profit'] for b in s3_bots)
+    s1_trades = sum(b['trades'] for b in s1_bots)
+    s2_trades = sum(b['trades'] for b in s2_bots)
+    s3_trades = sum(b['trades'] for b in s3_bots)
+
     return render_template_string(
         DASHBOARD_TEMPLATE,
         total_trades=total_trades,
@@ -622,6 +800,12 @@ def dashboard():
         s1_bots=sorted(s1_bots, key=lambda x: x['profit'], reverse=True),
         s2_bots=sorted(s2_bots, key=lambda x: x['profit'], reverse=True),
         s3_bots=sorted(s3_bots, key=lambda x: x['profit'], reverse=True),
+        s1_profit=s1_profit,
+        s2_profit=s2_profit,
+        s3_profit=s3_profit,
+        s1_trades=s1_trades,
+        s2_trades=s2_trades,
+        s3_trades=s3_trades,
         last_update=state.get('last_update', 'Never'),
     )
 

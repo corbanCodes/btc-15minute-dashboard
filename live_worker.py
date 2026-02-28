@@ -583,8 +583,11 @@ class LiveWorker:
 
         for bot_id, bot in self.bots.items():
             stats = bot.get_stats()
+            config = bot.config
             state['bots'][bot_id] = {
                 'series': stats['series'],
+                'name': config.get('name', bot_id),
+                'description': config.get('description', ''),
                 'trades': stats['total_trades'],
                 'wins': stats['wins'],
                 'losses': stats['losses'],
@@ -601,6 +604,16 @@ class LiveWorker:
                 'trade_history': bot.trades,  # Full trade history
                 'pending_trade': bot.pending_trade,  # Current pending trade if any
                 'last_skip_reason': bot.last_skip_reason,  # Why didn't it trade?
+                # Config details for strategy summary
+                'config': {
+                    'target_minute': config.get('target_minute'),
+                    'min_wait_minutes': config.get('min_wait_minutes'),
+                    'min_edge': config.get('min_edge'),
+                    'odds_threshold': config.get('odds_threshold'),
+                    'true_probability': config.get('true_probability'),
+                    'bet_size': config.get('bet_size', 10),
+                    'scale_with_edge': config.get('scale_with_edge', False),
+                },
             }
 
         try:
