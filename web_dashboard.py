@@ -136,7 +136,23 @@ DASHBOARD_TEMPLATE = '''
             gap: 12px;
             margin-bottom: 16px;
         }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
         h1 { color: #58a6ff; font-size: 1.4rem; font-weight: 600; }
+        .filter-select {
+            background: #21262d;
+            border: 1px solid #30363d;
+            color: #c9d1d9;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+        .filter-select:hover { border-color: #58a6ff; }
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
@@ -181,13 +197,21 @@ DASHBOARD_TEMPLATE = '''
             margin-bottom: 16px;
             overflow-x: auto;
         }
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #30363d;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
         h2 {
             color: #58a6ff;
             font-size: 1rem;
             font-weight: 600;
-            margin-bottom: 12px;
-            padding-bottom: 8px;
-            border-bottom: 1px solid #30363d;
+            margin: 0;
         }
         h2.s1 { color: #3fb950; }
         h2.s2 { color: #58a6ff; }
@@ -206,6 +230,7 @@ DASHBOARD_TEMPLATE = '''
         a.bot-link { color: #58a6ff; text-decoration: none; }
         a.bot-link:hover { text-decoration: underline; }
         .scrollable { max-height: 350px; overflow-y: auto; }
+        .filter-label { color: #8b949e; font-size: 0.75rem; }
         @media (max-width: 768px) {
             body { padding: 8px; }
             .header { padding: 12px; }
@@ -215,13 +240,32 @@ DASHBOARD_TEMPLATE = '''
             table { font-size: 0.75rem; }
             th, td { padding: 6px 8px; }
             .controls { justify-content: center; }
+            .filter-select { font-size: 0.75rem; padding: 6px 8px; }
         }
     </style>
 </head>
 <body>
     <div class="header">
         <div class="header-top">
-            <h1>BTC 15-Min Paper Trading</h1>
+            <div class="header-left">
+                <h1>BTC 15-Min Paper Trading</h1>
+                <select id="statsFilter" class="filter-select" onchange="updateStats()">
+                    <option value="all">All Bots</option>
+                    <option value="top10">Top 10</option>
+                    <option value="top1">Top Performer</option>
+                    <option value="profitable">Profitable Only</option>
+                    <optgroup label="By Series">
+                        <option value="s1">Series 1 (Fixed)</option>
+                        <option value="s2">Series 2 (Dynamic)</option>
+                        <option value="s3">Series 3 (Sentiment)</option>
+                    </optgroup>
+                    <optgroup label="Individual Bots">
+                        {% for bot in all_bots_sorted %}
+                        <option value="bot:{{ bot.bot_id }}">{{ bot.bot_id }}</option>
+                        {% endfor %}
+                    </optgroup>
+                </select>
+            </div>
             <div class="controls">
                 <a href="/download/json" class="btn">JSON</a>
                 <a href="/download/csv" class="btn">Summary</a>
@@ -231,15 +275,15 @@ DASHBOARD_TEMPLATE = '''
         </div>
         <div class="stats-grid">
             <div class="stat-box">
-                <div class="stat-value">{{ total_trades }}</div>
+                <div class="stat-value" id="statTrades">{{ total_trades }}</div>
                 <div class="stat-label">Trades</div>
             </div>
             <div class="stat-box">
-                <div class="stat-value {{ 'negative' if win_rate < 50 else '' }}">{{ "%.1f"|format(win_rate) }}%</div>
+                <div class="stat-value" id="statWinRate">{{ "%.1f"|format(win_rate) }}%</div>
                 <div class="stat-label">Win Rate</div>
             </div>
             <div class="stat-box">
-                <div class="stat-value {{ 'negative' if total_profit < 0 else '' }}">${{ "%.2f"|format(total_profit) }}</div>
+                <div class="stat-value" id="statPL">${{ "%.2f"|format(total_profit) }}</div>
                 <div class="stat-label">P/L</div>
             </div>
             <div class="stat-box">
@@ -290,7 +334,16 @@ DASHBOARD_TEMPLATE = '''
     <!-- Performance Chart -->
     {% if total_trades > 0 %}
     <div class="section">
-        <h2>P/L by Series Over Time</h2>
+        <div class="section-header">
+            <h2>P/L by Series</h2>
+            <select id="chartFilter" class="filter-select" onchange="updateChart()">
+                <option value="all">All Series</option>
+                <option value="positive">Profitable Only</option>
+                <option value="s1">Series 1 Only</option>
+                <option value="s2">Series 2 Only</option>
+                <option value="s3">Series 3 Only</option>
+            </select>
+        </div>
         <canvas id="mainChart" style="max-height: 200px;"></canvas>
     </div>
     {% endif %}
@@ -405,62 +458,130 @@ DASHBOARD_TEMPLATE = '''
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
-    {% if total_trades > 0 %}
-    const ctx = document.getElementById('mainChart').getContext('2d');
+    // All bot data for filtering
+    const allBots = {{ all_bots_json | safe }};
 
     // Series P/L data
     const seriesData = {
-        s1: { profit: {{ s1_profit }}, trades: {{ s1_trades }}, label: 'Fixed-Minute' },
-        s2: { profit: {{ s2_profit }}, trades: {{ s2_trades }}, label: 'Dynamic Edge' },
-        s3: { profit: {{ s3_profit }}, trades: {{ s3_trades }}, label: 'Sentiment' }
+        s1: { profit: {{ s1_profit }}, trades: {{ s1_trades }}, wins: {{ s1_wins }}, label: 'Fixed-Minute' },
+        s2: { profit: {{ s2_profit }}, trades: {{ s2_trades }}, wins: {{ s2_wins }}, label: 'Dynamic Edge' },
+        s3: { profit: {{ s3_profit }}, trades: {{ s3_trades }}, wins: {{ s3_wins }}, label: 'Sentiment' }
     };
 
-    new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels: ['Fixed-Minute (S1)', 'Dynamic Edge (S2)', 'Sentiment (S3)'],
-            datasets: [{
-                label: 'Profit/Loss',
-                data: [seriesData.s1.profit, seriesData.s2.profit, seriesData.s3.profit],
-                backgroundColor: [
-                    seriesData.s1.profit >= 0 ? 'rgba(63, 185, 80, 0.7)' : 'rgba(248, 81, 73, 0.7)',
-                    seriesData.s2.profit >= 0 ? 'rgba(63, 185, 80, 0.7)' : 'rgba(248, 81, 73, 0.7)',
-                    seriesData.s3.profit >= 0 ? 'rgba(63, 185, 80, 0.7)' : 'rgba(248, 81, 73, 0.7)'
-                ],
-                borderColor: [
-                    seriesData.s1.profit >= 0 ? '#3fb950' : '#f85149',
-                    seriesData.s2.profit >= 0 ? '#3fb950' : '#f85149',
-                    seriesData.s3.profit >= 0 ? '#3fb950' : '#f85149'
-                ],
-                borderWidth: 2
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    callbacks: {
-                        label: function(ctx) {
-                            const series = ['s1', 's2', 's3'][ctx.dataIndex];
-                            return `$${ctx.raw.toFixed(2)} (${seriesData[series].trades} trades)`;
+    let mainChart = null;
+
+    function updateStats() {
+        const filter = document.getElementById('statsFilter').value;
+        let filteredBots = allBots;
+
+        if (filter === 'top10') {
+            filteredBots = allBots.slice(0, 10);
+        } else if (filter === 'top1') {
+            filteredBots = allBots.slice(0, 1);
+        } else if (filter === 'profitable') {
+            filteredBots = allBots.filter(b => b.profit > 0);
+        } else if (filter === 's1') {
+            filteredBots = allBots.filter(b => b.bot_id.startsWith('s1_'));
+        } else if (filter === 's2') {
+            filteredBots = allBots.filter(b => b.bot_id.startsWith('s2_'));
+        } else if (filter === 's3') {
+            filteredBots = allBots.filter(b => b.bot_id.startsWith('s3_'));
+        } else if (filter.startsWith('bot:')) {
+            const botId = filter.replace('bot:', '');
+            filteredBots = allBots.filter(b => b.bot_id === botId);
+        }
+
+        const totalTrades = filteredBots.reduce((s, b) => s + b.trades, 0);
+        const totalWins = filteredBots.reduce((s, b) => s + b.wins, 0);
+        const totalProfit = filteredBots.reduce((s, b) => s + b.profit, 0);
+        const winRate = totalTrades > 0 ? (totalWins / totalTrades * 100) : 0;
+
+        document.getElementById('statTrades').textContent = totalTrades;
+        document.getElementById('statWinRate').textContent = winRate.toFixed(1) + '%';
+        document.getElementById('statWinRate').className = 'stat-value' + (winRate < 50 ? ' negative' : '');
+        document.getElementById('statPL').textContent = '$' + totalProfit.toFixed(2);
+        document.getElementById('statPL').className = 'stat-value' + (totalProfit < 0 ? ' negative' : '');
+    }
+
+    {% if total_trades > 0 %}
+    const ctx = document.getElementById('mainChart').getContext('2d');
+
+    function createChart(labels, data, trades) {
+        if (mainChart) mainChart.destroy();
+
+        mainChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Profit/Loss',
+                    data: data,
+                    backgroundColor: data.map(v => v >= 0 ? 'rgba(63, 185, 80, 0.7)' : 'rgba(248, 81, 73, 0.7)'),
+                    borderColor: data.map(v => v >= 0 ? '#3fb950' : '#f85149'),
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return `$${context.raw.toFixed(2)} (${trades[context.dataIndex]} trades)`;
+                            }
                         }
                     }
-                }
-            },
-            scales: {
-                y: {
-                    grid: { color: '#21262d' },
-                    ticks: { color: '#8b949e', callback: v => '$' + v }
                 },
-                x: {
-                    grid: { display: false },
-                    ticks: { color: '#8b949e' }
+                scales: {
+                    y: {
+                        grid: { color: '#21262d' },
+                        ticks: { color: '#8b949e', callback: v => '$' + v }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#8b949e' }
+                    }
                 }
             }
+        });
+    }
+
+    function updateChart() {
+        const filter = document.getElementById('chartFilter').value;
+
+        if (filter === 'all') {
+            createChart(
+                ['Fixed-Minute (S1)', 'Dynamic Edge (S2)', 'Sentiment (S3)'],
+                [seriesData.s1.profit, seriesData.s2.profit, seriesData.s3.profit],
+                [seriesData.s1.trades, seriesData.s2.trades, seriesData.s3.trades]
+            );
+        } else if (filter === 'positive') {
+            const labels = [], data = [], trades = [];
+            if (seriesData.s1.profit > 0) { labels.push('Fixed-Minute (S1)'); data.push(seriesData.s1.profit); trades.push(seriesData.s1.trades); }
+            if (seriesData.s2.profit > 0) { labels.push('Dynamic Edge (S2)'); data.push(seriesData.s2.profit); trades.push(seriesData.s2.trades); }
+            if (seriesData.s3.profit > 0) { labels.push('Sentiment (S3)'); data.push(seriesData.s3.profit); trades.push(seriesData.s3.trades); }
+            if (labels.length === 0) { labels.push('No profitable series'); data.push(0); trades.push(0); }
+            createChart(labels, data, trades);
+        } else if (filter === 's1') {
+            const s1Bots = allBots.filter(b => b.bot_id.startsWith('s1_')).slice(0, 10);
+            createChart(s1Bots.map(b => b.bot_id.replace('s1_', '')), s1Bots.map(b => b.profit), s1Bots.map(b => b.trades));
+        } else if (filter === 's2') {
+            const s2Bots = allBots.filter(b => b.bot_id.startsWith('s2_')).slice(0, 10);
+            createChart(s2Bots.map(b => b.bot_id.replace('s2_', '').slice(0,15)), s2Bots.map(b => b.profit), s2Bots.map(b => b.trades));
+        } else if (filter === 's3') {
+            const s3Bots = allBots.filter(b => b.bot_id.startsWith('s3_')).slice(0, 10);
+            createChart(s3Bots.map(b => b.bot_id.replace('s3_', '').slice(0,15)), s3Bots.map(b => b.profit), s3Bots.map(b => b.trades));
         }
-    });
+    }
+
+    // Initial chart
+    createChart(
+        ['Fixed-Minute (S1)', 'Dynamic Edge (S2)', 'Sentiment (S3)'],
+        [seriesData.s1.profit, seriesData.s2.profit, seriesData.s3.profit],
+        [seriesData.s1.trades, seriesData.s2.trades, seriesData.s3.trades]
+    );
     {% endif %}
     </script>
 </body>
@@ -650,10 +771,75 @@ BOT_DETAIL_TEMPLATE = '''
            Strike: ${{ "%.0f"|format(pending_trade.strike) }} |
            Bet: ${{ "%.2f"|format(pending_trade.bet_size) }}</p>
     </div>
-    {% elif skip_reason %}
-    <div class="status-box skip">
-        <h3>CURRENT STATUS</h3>
-        <p>{{ skip_reason }}</p>
+    {% endif %}
+
+    <!-- Decision Logic Section -->
+    <div class="section">
+        <h2>Current Status & Decision Logic</h2>
+        <div class="status-box {{ 'skip' if skip_reason else '' }}" style="margin-bottom: 16px;">
+            <h3 style="color: {{ '#d29922' if skip_reason else '#3fb950' }};">
+                {% if skip_reason %}NOT TRADING: {{ skip_reason }}{% else %}READY TO TRADE{% endif %}
+            </h3>
+        </div>
+
+        <div style="background: #21262d; border-radius: 8px; padding: 16px; font-size: 0.85rem;">
+            <p style="color: #58a6ff; font-weight: 600; margin-bottom: 12px;">What this bot checks each tick:</p>
+
+            {% if bot_data.series == 'fixed_minute' %}
+            <ol style="color: #c9d1d9; margin-left: 20px; line-height: 1.8;">
+                <li>Is current minute = <strong>{{ bot_data.config.target_minute }}</strong>? (±30 sec window)</li>
+                <li>Is BTC above or below strike? → Determines YES or NO direction</li>
+                <li>Is market price available? (not 0c or 100c)</li>
+                <li>Is edge ≥ <strong>{{ "%.0f"|format(bot_data.config.min_edge * 100) }}%</strong>?
+                    <br><span style="color: #8b949e; font-size: 0.8rem;">Edge = True Prob ({{ "%.1f"|format(bot_data.config.true_probability * 100) }}%) - Market Price</span></li>
+                <li>Has it already traded this window?</li>
+            </ol>
+            <p style="color: #8b949e; margin-top: 12px; font-size: 0.8rem;">
+                <strong>Note:</strong> If market is pricing YES/NO at {{ "%.0f"|format(bot_data.config.true_probability * 100) }}c or higher at minute {{ bot_data.config.target_minute }},
+                edge will be 0% or negative → no trade.
+            </p>
+            {% elif bot_data.series == 'dynamic_edge' %}
+            <ol style="color: #c9d1d9; margin-left: 20px; line-height: 1.8;">
+                <li>Has <strong>{{ bot_data.config.min_wait_minutes }}</strong> minutes passed in this window?</li>
+                <li>Is there more than 1 minute left?</li>
+                <li>Is BTC above or below strike? → Determines direction</li>
+                <li>What's the persistence rate for current minute? (from 5yr BTC data)</li>
+                <li>Is edge ≥ <strong>{{ "%.0f"|format(bot_data.config.min_edge * 100) }}%</strong>?</li>
+                <li>Has it already traded this window?</li>
+            </ol>
+            {% elif bot_data.series == 'sentiment' %}
+            <ol style="color: #c9d1d9; margin-left: 20px; line-height: 1.8;">
+                <li>Has <strong>{{ bot_data.config.min_wait_minutes }}</strong> minutes passed?</li>
+                <li>Is YES or NO price ≥ <strong>{{ bot_data.config.odds_threshold }}c</strong>?</li>
+                <li>Bet with the favorite (whichever side hits threshold)</li>
+                <li>Has it already traded this window?</li>
+            </ol>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Window Decision Log -->
+    {% if decision_log %}
+    <div class="section">
+        <h2>Window Decision Log</h2>
+        <table>
+            <tr>
+                <th>Window</th>
+                <th>Time</th>
+                <th>Market</th>
+                <th>Edge</th>
+                <th>Decision</th>
+            </tr>
+            {% for log in decision_log | reverse %}
+            <tr>
+                <td>{{ log.window_id[-4:] }}</td>
+                <td>Min {{ log.minute }}</td>
+                <td>{{ log.direction }} @ {{ log.price }}c</td>
+                <td class="{{ 'positive' if log.edge > 0 else 'negative' }}">{{ "%.1f"|format(log.edge * 100) }}%</td>
+                <td>{{ log.decision }}</td>
+            </tr>
+            {% endfor %}
+        </table>
     </div>
     {% endif %}
 
@@ -823,6 +1009,9 @@ def dashboard():
     s1_trades = sum(b['trades'] for b in s1_bots)
     s2_trades = sum(b['trades'] for b in s2_bots)
     s3_trades = sum(b['trades'] for b in s3_bots)
+    s1_wins = sum(b['wins'] for b in s1_bots)
+    s2_wins = sum(b['wins'] for b in s2_bots)
+    s3_wins = sum(b['wins'] for b in s3_bots)
 
     # Get market data as object for template
     market_data = state.get('market')
@@ -837,6 +1026,8 @@ def dashboard():
         current_window=state.get('current_window'),
         market=market,
         top_bots=bot_list[:10],
+        all_bots_sorted=bot_list,
+        all_bots_json=json.dumps(bot_list),
         s1_bots=sorted(s1_bots, key=lambda x: x['profit'], reverse=True),
         s2_bots=sorted(s2_bots, key=lambda x: x['profit'], reverse=True),
         s3_bots=sorted(s3_bots, key=lambda x: x['profit'], reverse=True),
@@ -846,6 +1037,9 @@ def dashboard():
         s1_trades=s1_trades,
         s2_trades=s2_trades,
         s3_trades=s3_trades,
+        s1_wins=s1_wins,
+        s2_wins=s2_wins,
+        s3_wins=s3_wins,
         last_update=state.get('last_update', 'Never'),
     )
 
@@ -949,6 +1143,7 @@ def bot_detail(bot_id):
     trades = bot_data.get('trade_history', [])
     pending_trade = bot_data.get('pending_trade')
     skip_reason = bot_data.get('last_skip_reason')
+    decision_log = bot_data.get('decision_log', [])  # For future use
 
     return render_template_string(
         BOT_DETAIL_TEMPLATE,
@@ -957,6 +1152,7 @@ def bot_detail(bot_id):
         trades=trades,
         pending_trade=pending_trade,
         skip_reason=skip_reason,
+        decision_log=decision_log,
     )
 
 @app.route('/bot/<bot_id>/csv')
