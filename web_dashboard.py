@@ -10,7 +10,7 @@ import os
 import json
 import csv
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import wraps
 from types import SimpleNamespace
 from flask import Flask, render_template_string, jsonify, request, Response, redirect, url_for, session
@@ -454,7 +454,7 @@ DASHBOARD_TEMPLATE = '''
         </div>
     </div>
 
-    <p class="last-update">Last update: {{ last_update }} | Auto-refresh every 30 seconds</p>
+    <p class="last-update">Last update: {{ last_update_readable or last_update }} | Write #{{ state_write_count or '?' }} | Auto-refresh every 30 seconds</p>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
@@ -1041,6 +1041,8 @@ def dashboard():
         s2_wins=s2_wins,
         s3_wins=s3_wins,
         last_update=state.get('last_update', 'Never'),
+        last_update_readable=state.get('last_update_readable'),
+        state_write_count=state.get('state_write_count', 0),
     )
 
 @app.route('/api/state')
@@ -1048,6 +1050,39 @@ def dashboard():
 def api_state():
     """Return current state as JSON"""
     return jsonify(load_state())
+
+@app.route('/api/debug')
+@require_auth
+def api_debug():
+    """Debug endpoint to check state file health"""
+    import os
+    debug_info = {
+        'state_file_exists': os.path.exists(STATE_FILE),
+        'state_file_path': os.path.abspath(STATE_FILE),
+        'current_working_dir': os.getcwd(),
+        'server_time': datetime.now(timezone.utc).isoformat() if timezone else datetime.utcnow().isoformat(),
+    }
+
+    if os.path.exists(STATE_FILE):
+        stat = os.stat(STATE_FILE)
+        debug_info['state_file_size'] = stat.st_size
+        debug_info['state_file_modified'] = datetime.fromtimestamp(stat.st_mtime).isoformat()
+
+        state = load_state()
+        debug_info['state_last_update'] = state.get('last_update')
+        debug_info['state_last_update_readable'] = state.get('last_update_readable')
+        debug_info['state_write_count'] = state.get('state_write_count')
+        debug_info['windows_processed'] = state.get('windows_processed')
+        debug_info['current_window'] = state.get('current_window')
+        debug_info['bot_count'] = len(state.get('bots', {}))
+
+        # Check if market data exists
+        market = state.get('market')
+        if market:
+            debug_info['market_timestamp'] = market.get('timestamp')
+            debug_info['market_btc_price'] = market.get('btc_price')
+
+    return jsonify(debug_info)
 
 @app.route('/download/json')
 @require_auth

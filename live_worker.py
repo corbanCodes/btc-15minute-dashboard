@@ -564,6 +564,7 @@ class LiveWorker:
         self.settled_windows = set()
         self.last_status_log = 0
         self.start_time = datetime.now()
+        self.state_write_count = 0  # Track state file writes for debugging
 
         # Initialize all bots
         for bot_id, config in ALL_BOTS.items():
@@ -573,8 +574,11 @@ class LiveWorker:
 
     def save_state(self):
         """Save current state to JSON for web dashboard"""
+        self.state_write_count += 1
         state = {
             'last_update': datetime.now(timezone.utc).isoformat(),
+            'last_update_readable': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
+            'state_write_count': self.state_write_count,
             'windows_processed': len(self.settled_windows),
             'current_window': self.current_window,
             'runtime_seconds': (datetime.now() - self.start_time).total_seconds(),
