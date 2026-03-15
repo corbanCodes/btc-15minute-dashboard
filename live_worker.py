@@ -763,6 +763,17 @@ class LiveWorker:
                     self.current_window = window_id
 
                 # Build tick
+                # Kalshi API now returns prices in dollars as strings (e.g., "0.1600")
+                # Convert to cents (integer) for compatibility
+                def dollars_to_cents(val):
+                    """Convert dollar string like '0.1600' to cents int like 16"""
+                    if val is None:
+                        return 0
+                    try:
+                        return int(float(val) * 100)
+                    except (ValueError, TypeError):
+                        return 0
+
                 tick = {
                     'timestamp': datetime.now(timezone.utc).isoformat(),
                     'window_id': window_id,
@@ -770,10 +781,10 @@ class LiveWorker:
                     'strike_price': details.get('floor_strike', 0),
                     'mins_left': mins_left,
                     'btc_price': btc_price,
-                    'yes_ask': details.get('yes_ask', 0),
-                    'yes_bid': details.get('yes_bid', 0),
-                    'no_ask': details.get('no_ask', 0),
-                    'no_bid': details.get('no_bid', 0),
+                    'yes_ask': dollars_to_cents(details.get('yes_ask_dollars')),
+                    'yes_bid': dollars_to_cents(details.get('yes_bid_dollars')),
+                    'no_ask': dollars_to_cents(details.get('no_ask_dollars')),
+                    'no_bid': dollars_to_cents(details.get('no_bid_dollars')),
                 }
 
                 # Skip if strike is 0
